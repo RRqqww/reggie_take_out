@@ -14,10 +14,13 @@ import com.itheima.reggie.service.DishService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/dish")
@@ -34,6 +37,8 @@ public class DishController {
     @Autowired
     private DishFlavorService dishFlavorService;
 
+    @Autowired
+    private RedisTemplate redisTemplate;
     /**
      * 新增菜品
      * @param dishDto
@@ -116,6 +121,14 @@ public class DishController {
     public R<String> update(@RequestBody DishDto dishDto){
         log.info(dishDto.toString());
         dishService.updateWithFlavor(dishDto);
+
+        // 清理所有菜品的缓存数据
+        //Set keys = redisTemplate.keys("dish_*");
+        //redisTemplate.delete(keys);
+
+        // 清理某个分类下面的菜品缓存数据
+        String key = "dish_" + dishDto.getCategoryId() + "_1";
+        redisTemplate.delete(key);
         return R.success("新增菜品成功");
     }
 
@@ -149,6 +162,20 @@ public class DishController {
      */
     @GetMapping("/list")
     public R<List<DishDto>> get(Dish dish){
+        ArrayList<DishDto> dishDtoList = null;
+
+        String key = "dish_" + dish.getCategoryId() + "_" +dish.getStatus();
+
+        // 先从redis中获取缓存数据
+        dishDtoList = (ArrayList<DishDto>) redisTemplate.opsForValue().get(key);
+
+        // 如果存在直接返回，无需查询数据库
+        if (dishDtoList != null){
+            return R.success(dishDtoList);
+        }
+
+
+
         LambdaQueryWrapper<Dish> queryWrapper = new LambdaQueryWrapper<>();
         // 跟据传进来的categoryId进行查询
         queryWrapper.eq(dish.getCategoryId() != null,Dish::getCategoryId,dish.getCategoryId());
@@ -160,7 +187,9 @@ public class DishController {
         List<Dish> list = dishService.list(queryWrapper);
         // 返回结果
 
-        ArrayList<DishDto> dishDtoList = new ArrayList<>();
+
+        // 这里需要new一个对象进行赋值，否则下面add的时候会空指针异常
+        dishDtoList = new ArrayList<>();
 
         for (Dish dish1 : list) {
 
@@ -187,6 +216,9 @@ public class DishController {
 
             dishDtoList.add(dishDto);
         }
+        // 如果不redis中存在，需要查询数据库，将查询到的菜品数据缓存到redis
+        redisTemplate.opsForValue().set(key,dishDtoList,60, TimeUnit.MINUTES);
+
         return R.success(dishDtoList);
     }
 }
